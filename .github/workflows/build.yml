@@ -1,0 +1,58 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Generate platform folders
+        run: flutter create . --platforms=android --project-name dizsware --org com.dizs
+
+      - name: Label, permissions, cleartext
+        run: |
+          sed -i 's|android:label="[^"]*"|android:label="Dizs Ware"|' android/app/src/main/AndroidManifest.xml
+          sed -i 's|<manifest xmlns:android="http://schemas.android.com/apk/res/android">|&\n    <uses-permission android:name="android.permission.INTERNET"/>|' android/app/src/main/AndroidManifest.xml
+          sed -i 's|<application|<application android:usesCleartextTraffic="true"|' android/app/src/main/AndroidManifest.xml
+
+      - name: Set minSdk 24
+        run: sed -i -E 's/minSdk(Version)? *=? *[^ ]+/minSdk = 24/' android/app/build.gradle* || true
+
+      - name: Add Shizuku and MainActivity
+        run: |
+          if [ -f android/app/build.gradle.kts ]; then
+            printf '\ndependencies {\n    implementation("dev.rikka.shizuku:api:13.1.5")\n    implementation("dev.rikka.shizuku:provider:13.1.5")\n}\n' >> android/app/build.gradle.kts
+          else
+            printf "\ndependencies {\n    implementation 'dev.rikka.shizuku:api:13.1.5'\n    implementation 'dev.rikka.shizuku:provider:13.1.5'\n}\n" >> android/app/build.gradle
+          fi
+          mkdir -p android/app/src/main/kotlin/com/dizs/dizsware
+          cp android_extra/MainActivity.kt android/app/src/main/kotlin/com/dizs/dizsware/MainActivity.kt
+
+      - name: Disable R8 and keep ML Kit
+        run: |
+          mkdir -p android/app
+          printf '%s\n' '-keep class com.google.mlkit.** { *; }' '-keep class com.google.android.gms.** { *; }' '-dontwarn com.google.mlkit.**' '-dontwarn com.google.android.gms.**' > android/app/proguard-rules.pro
+          for f in android/app/build.gradle android/app/build.gradle.kts; do
+            [ -f "$f" ] || continue
+            sed -i -E 's/isMinifyEnabled *= *true/isMinifyEnabled = false/; s/minifyEnabled +true/minifyEnabled false/; s/isShrinkResources *= *true/isShrinkResources = false/; s/shrinkResources +true/shrinkResources false/' "$f"
+          done
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build APK
+        run: flutter build apk --release --no-shrink
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dizs-ware-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
